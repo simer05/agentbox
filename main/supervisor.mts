@@ -191,14 +191,14 @@ import { askEngine } from './ask-the-engine.mts';
 import type { EngineAnswer } from './ask-the-engine.mts';
 import { takeAccountRecheck } from './account-recheck.mts';
 import { runsOn } from './runs-on.mts';
-import { MemoryGateServer, defaultSocketPath as memoryGateSocketPath, readMacPressure } from './memory-gate-server.mts';
+import { MemoryGateServer, defaultSocketPath as memoryGateSocketPath, gateChannel, readMacPressure } from './memory-gate-server.mts';
 import { startDecision, readMacPressureNow, SETTLE_MS, STALE_MS } from './start-hold.mts';
 import { MemoryLog } from './memory-log.mts';
 import { StartBudget, cloudStartPressure } from './cloud/start-budget.mts';
 import { isPlainMerge, mergeHome, mergedSentence } from './cloud/merge-home.mts';
 import { asksToClose } from '../shared/asks-to-close.mts';
 import type { MergeHomeResult } from './cloud/merge-home.mts';
-import { autoSlots, DEFAULTS as MEMORY_GATE, memoryGateWorksOn, pressureFrom } from './memory-gate.mts';
+import { autoSlots, DEFAULTS as MEMORY_GATE, gateRaisesAgents, pressureFrom } from './memory-gate.mts';
 import { LeftoverCleaner } from './leftovers.mts';
 import { syncCodexMemoryGate } from './codex-memory-gate.mts';
 import { autoAgents } from './machine.mts';
@@ -6553,7 +6553,7 @@ export class Supervisor {
    */
   _machineTotal(): number | null {
     if (this.config.agentsAuto) {
-      return autoAgents({ ...this._machine(), gated: this._memoryGateOn(), nudge: this.config.agentsNudge });
+      return autoAgents({ ...this._machine(), gated: gateRaisesAgents(this._memoryGateOn()), nudge: this.config.agentsNudge });
     }
     const picked = Number(this.config.agentsAtOnce);
     if (!this.config.agentsAuto && Number.isFinite(picked) && picked >= 1) return Math.floor(picked);
@@ -14345,10 +14345,11 @@ export class Supervisor {
   // behind them are in main/memory-gate.mts.
 
   /** The hooks for the per-spawn settings file, or null when it is off. */
-  memoryGateHooks() {
+  memoryGateHooks(platform: NodeJS.Platform = process.platform) {
     if (!this._memoryGateOn()) return null;
     const script = unpacked(path.join(this.appDir, 'scripts', 'memory-gate-hook.sh'));
-    const quoted = `'${script.replace(/'/g, `'\\''`)}'`;
+    const quoted = platform === 'win32' ? this._windowsGateHook() : `'${script.replace(/'/g, `'\\''`)}'`;
+    if (!quoted) return null;
     // Above the longest wait by ten minutes: a hook that times out lets its
     // command run (measured), so the app's own refusal must always come first.
     const timeout = Math.ceil(MEMORY_GATE.maxWaitMs / 1000) + 600;
@@ -14360,9 +14361,54 @@ export class Supervisor {
     };
   }
 
+  /** Where the coordinator serves on Windows (`gateChannel`); null elsewhere, where it is the socket. */
+  _memoryGateChannel(platform: NodeJS.Platform = process.platform) {
+    return gateChannel(this.config.memoryGateSocket || memoryGateSocketPath(), { platform });
+  }
+
+  /**
+   * The Windows hook: scripts/memory-gate-hook.cmd, double-quoted, which both
+   * cmd.exe and Git Bash run. A path either would expand inside the quotes gets
+   * no hook rather than a command that runs something else.
+   */
+  _windowsGateHook() {
+    const shim = unpacked(path.join(this.appDir, 'scripts', 'memory-gate-hook.cmd'));
+    if (/["%$`]/.test(shim)) return null;
+    if (!this._windowsGateParts()) return null;
+    if (!this._memoryGateChannel('win32')?.dir) return null;
+    return `"${shim}"`;
+  }
+
+  /**
+   * What the .cmd starts. cmd.exe parses the expanded text again, so an install
+   * folder holding one of these characters would split or mangle the line: such
+   * a folder gets no hook, and its commands run unchecked.
+   */
+  _windowsGateParts() {
+    const parts = { runtime: process.execPath, flags: stripTypesFlags().join(' '), hook: path.join(this.appDir, 'main', 'memory-gate-hook.mts') };
+    return Object.values(parts).some((part) => /[&|<>^"%!]/.test(part)) ? null : parts;
+  }
+
   /** Where a worker's hook asks, and who it is asking for. Empty when off. */
-  memoryGateEnv(item: WorkItem | null | undefined) {
+  memoryGateEnv(item: WorkItem | null | undefined, platform: NodeJS.Platform = process.platform) {
     if (!this._memoryGateOn() || !item) return {};
+    if (platform === 'win32') {
+      // The local channel instead of the socket, and what the .cmd starts:
+      // this app's own binary as a node, on main/memory-gate-hook.mts.
+      const channel = this._memoryGateChannel(platform);
+      const parts = this._windowsGateParts();
+      if (!channel?.dir || !parts) return {};
+      return {
+        AGENTBOX_GATE_CHANNEL: channel.dir,
+        AGENTBOX_GATE_STAMP: channel.stamp,
+        AGENTBOX_GATE_RUNTIME: parts.runtime,
+        AGENTBOX_GATE_FLAGS: parts.flags,
+        AGENTBOX_GATE_HOOK: parts.hook,
+        AGENTBOX_GATE_ITEM: String(item.id ?? ''),
+        AGENTBOX_GATE_PRODUCT: String(item.product ?? ''),
+        AGENTBOX_GATE_SCORE: String(Math.max(0, Math.round(this._score(item)) || 0)),
+      };
+    }
     return {
       AGENTBOX_GATE_SOCK: this.config.memoryGateSocket || memoryGateSocketPath(),
       AGENTBOX_GATE_ITEM: String(item.id ?? ''),
@@ -14383,8 +14429,10 @@ export class Supervisor {
    * hooks.json their terminal reads too, and it exits on its first line when
    * AGENTBOX_GATE_SOCK is absent — which it is everywhere but here.
    */
-  codexMemoryGateEnv() {
-    if (!this._memoryGateOn()) return {};
+  codexMemoryGateEnv(platform: NodeJS.Platform = process.platform) {
+    // No Codex hook is written on Windows (main/codex-memory-gate.mts), so
+    // nothing there would read it.
+    if (!this._memoryGateOn() || platform === 'win32') return {};
     return { AGENTBOX_GATE_SOCK: this.config.memoryGateSocket || memoryGateSocketPath() };
   }
 
@@ -14486,10 +14534,9 @@ export class Supervisor {
     });
   }
 
-  _memoryGateOn() { return !!this.config.memoryGate && memoryGateWorksOn(); }
+  _memoryGateOn() { return !!this.config.memoryGate; }
 
   async setMemoryGate(on: boolean) {
-    if (!memoryGateWorksOn()) return;
     if (!on) {
       await this.stopMemoryGate();
       await this.setCodexMemoryGate(false).catch(() => {});
@@ -14498,6 +14545,7 @@ export class Supervisor {
     if (this._memoryGate) { this._memoryGate.setSlots(this.memoryGateSlots()); return; }
     const server = new MemoryGateServer({
       socketPath: this.config.memoryGateSocket || memoryGateSocketPath(),
+      channel: this._memoryGateChannel(),
       // A test runs its own coordinator beside the real one; it names a port.
       ...(Number.isInteger(this.config.memoryGateLockPort) ? { lockPort: this.config.memoryGateLockPort } : {}),
       historyFile: path.join(this.userDir, 'memory-gate-history.json'),

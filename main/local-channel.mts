@@ -161,7 +161,8 @@ export function pipeName(kind: unknown): string {
   return `${pipePrefix(kind)}${crypto.randomBytes(16).toString('hex')}`;
 }
 
-const markerFile = (dir: string, kind: string, stamp: string) => path.join(dir, `${kind}.${stamp}.pipe`);
+/** Where the server of `kind` and `stamp` records its pipe. No file means no server. */
+export const markerFile = (dir: string, kind: string, stamp: string) => path.join(dir, `${kind}.${stamp}.pipe`);
 
 interface Marker { raw: Buffer; name: string | null; pid: number | null }
 

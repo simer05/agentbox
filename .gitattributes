@@ -2,3 +2,6 @@
 # with core.autocrlf converts them to CRLF, and tests that read a source file
 # as text then see a \r on every line.
 * text=auto eol=lf
+
+# cmd.exe reads a batch file by its CRLF line ends.
+*.cmd text eol=crlf

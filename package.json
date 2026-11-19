@@ -55,6 +55,7 @@
     "scripts/approval-server.sh",
     "scripts/cloud-shim.pl",
     "scripts/memory-gate-hook.sh",
+    "scripts/memory-gate-hook.cmd",
     "scripts/safety-check-hook.sh",
     "worker-permissions.json",
     "LICENSE",
@@ -182,6 +183,7 @@
       "scripts/approval-server.sh",
       "scripts/cloud-shim.pl",
       "scripts/memory-gate-hook.sh",
+      "scripts/memory-gate-hook.cmd",
       "scripts/safety-check-hook.sh",
       "mcp/connection-proxy.mts",
       "renderer/dist/**/*",
@@ -192,6 +194,7 @@
       "scripts/approval-server.sh",
       "scripts/cloud-shim.pl",
       "scripts/memory-gate-hook.sh",
+      "scripts/memory-gate-hook.cmd",
       "scripts/safety-check-hook.sh",
       "node_modules/node-pty/**",
       "main/native/**/*.node"

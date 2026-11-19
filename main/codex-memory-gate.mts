@@ -114,10 +114,11 @@ export interface CodexMemoryGateResult {
 }
 
 /**
- * Whether Codex can run our hook here. Not on Windows: the hook is a quoted
- * path to a .sh script, which neither cmd nor PowerShell runs, and the
- * coordinator it asks cannot listen on a socket file there (EACCES). So on
- * Windows nothing is written into the Codex home at all, on or off.
+ * Whether Codex gets our hook here. Not on Windows, where the app writes
+ * nothing into a person's Codex home, on or off. Codex reads hooks only from
+ * hooks.json in that home and runs one only once config.toml there trusts it,
+ * and no per-run way to hand an app-server a hook has been measured, so
+ * Windows Codex workers run unchecked.
  */
 export function codexHookRunsOn(platform: NodeJS.Platform = process.platform) {
   return platform !== 'win32';

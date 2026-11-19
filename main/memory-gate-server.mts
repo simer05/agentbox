@@ -26,6 +26,7 @@
 // but the learned history; a grant whose agent process is gone, or whose pid
 // now belongs to a different program, is released at the next sample.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import net from 'node:net';
@@ -38,15 +39,39 @@ import { CommandHistory } from './memory-gate-history.mts';
 import type { Verdict } from './memory-gate-history.mts';
 import { etimeSeconds } from './leftovers.mts';
 import { readMacPressure } from './mac-pressure.mts';
+import { channelDir, serveLocal } from './local-channel.mts';
 
 export const PROTOCOL = 1;
 export const DEFAULT_LOCK_PORT = 47263;
+/** The local channel's kind for the memory check (main/local-channel.mts). */
+export const CHANNEL_KIND = 'memory-gate';
 
 /** Where every Agentbox on this Mac meets. Short, because macOS caps a socket
  *  path at 104 bytes, and in the per-user temp folder, so it is this user's. */
 export function defaultSocketPath() {
   return path.join(os.tmpdir(), 'agentbox-memory-gate.sock');
 }
+
+/** The Windows channel the coordinator serves in place of a socket: its folder and stamp, or why it has no folder. */
+export type GateChannel = { dir: string; stamp: string } | { dir: null; problem: string };
+
+/**
+ * Windows cannot listen on a socket file (EACCES), so there the coordinator
+ * serves the local channel. The stamp comes from the socket path, so every app
+ * on the default path still meets at one coordinator and a test's own path gets
+ * its own. Elsewhere null: the socket, as before.
+ */
+export function gateChannel(
+  socketPath: string,
+  { platform = process.platform, env = process.env, home = os.homedir() }: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; home?: string } = {},
+): GateChannel | null {
+  if (platform !== 'win32') return null;
+  const found = channelDir({ platform, env, home });
+  const stamp = crypto.createHash('sha256').update(path.win32.resolve(socketPath)).digest('hex').slice(0, 16);
+  return found.dir !== null ? { dir: found.dir, stamp } : { dir: null, problem: found.reason };
+}
+
+const noProcesses = async (): Promise<ProcessSample[]> => [];
 
 /** The deny Claude Code reads from a PreToolUse hook. */
 export function denyOutput(reason: string): string {
@@ -136,6 +161,8 @@ export interface GrantLine {
 
 export interface MemoryGateServerOptions {
   socketPath?: string;
+  channel?: GateChannel | null;
+  platform?: NodeJS.Platform;
   historyFile?: string | null;
   history?: CommandHistory | null;
   grantLogFile?: string | null;
@@ -158,6 +185,8 @@ export interface MemoryGateServerOptions {
 
 export class MemoryGateServer {
   declare socketPath: string;
+  declare channel: GateChannel | null;
+  declare blind: boolean;
   declare historyFile: string | null;
   declare grantLogFile: string | null;
   declare grantLogMaxBytes: number;
@@ -193,6 +222,10 @@ export class MemoryGateServer {
 
   constructor({
     socketPath = defaultSocketPath(),
+    // Set on Windows only (`gateChannel`): the coordinator serves the local
+    // channel there instead of listening on `socketPath`.
+    channel = null,
+    platform = process.platform,
     historyFile = null,
     history = null,
     // One appended line per grant, so what the slots cost can be read later.
@@ -214,7 +247,7 @@ export class MemoryGateServer {
     // a worker's own request can make its command urgent.
     urgentFor = null,
     readPressure = readMacPressure,
-    sampleProcesses = listProcesses,
+    sampleProcesses,
     pollMs = 2_000,
     takeoverMs = 5_000,
     // The port whose holder is the one coordinator on this Mac. Fixed so that
@@ -232,6 +265,11 @@ export class MemoryGateServer {
     log = () => {},
   }: MemoryGateServerOptions = {}) {
     this.socketPath = socketPath;
+    this.channel = channel;
+    // Windows has no `ps` to find a command's agent process by, so a grant
+    // there is never measured, and one whose "after" report was lost is let go
+    // after `sharedGrantMs`, as a shared one is (`_sample`).
+    this.blind = platform === 'win32';
     this.historyFile = historyFile;
     this.grantLogFile = grantLogFile;
     this.grantLogMaxBytes = grantLogMaxBytes;
@@ -245,7 +283,7 @@ export class MemoryGateServer {
     this.ownerOf = ownerOf;
     this.urgentFor = urgentFor;
     this.readPressure = readPressure;
-    this.sampleProcesses = sampleProcesses;
+    this.sampleProcesses = sampleProcesses ?? (this.blind ? noProcesses : listProcesses);
     this.pollMs = pollMs;
     this.takeoverMs = takeoverMs;
     this.lockPort = lockPort;
@@ -263,6 +301,10 @@ export class MemoryGateServer {
 
   async start() {
     if (this.role !== 'stopped') return this.role;
+    if (this.channel && this.channel.dir === null) {
+      this.log(`memory gate: not started, because there is no folder for the app's local channel: ${this.channel.problem}`);
+      return this.role;
+    }
     this.stopping = false;
     await this._claim();
     return this.role;
@@ -280,7 +322,8 @@ export class MemoryGateServer {
       this.server = null;
       await new Promise<void>((resolve) => server.close(() => resolve()));
       server.closeAllConnections?.();
-      try { fs.unlinkSync(this.socketPath); } catch {}
+      // Closing a channel server removes its own marker.
+      if (!this.channel) try { fs.unlinkSync(this.socketPath); } catch {}
     }
     // The lock goes last, so nobody can take over while the socket is still ours.
     if (this.lock) {
@@ -305,7 +348,7 @@ export class MemoryGateServer {
     if (this.stopping) return;
     if (await this._listen()) {
       this.role = 'owner';
-      this.log(`memory gate: coordinating on ${this.socketPath}`);
+      this.log(`memory gate: coordinating on ${this.channel ? 'the local channel' : this.socketPath}`);
       this._poll();
       this.pollTimer = setInterval(() => this._poll(), this.pollMs);
       this.pollTimer.unref?.();
@@ -341,6 +384,7 @@ export class MemoryGateServer {
     }
     lock.unref?.();
     const server = http.createServer((req, res) => this._handle(req, res));
+    if (this.channel?.dir) return this._serveChannel(server, lock, this.channel);
     let err = await bind(server, this.socketPath);
     if (err?.code === 'EADDRINUSE') {
       // We hold the lock, so whatever sits at the path belongs to an owner that
@@ -354,6 +398,27 @@ export class MemoryGateServer {
       return false;
     }
     try { fs.chmodSync(this.socketPath, 0o600); } catch {}
+    this.server = server;
+    this.lock = lock;
+    return true;
+  }
+
+  // The same HTTP server on the Windows local channel, where a hook writes
+  // nothing until the server has proved it holds the account's key. The lock
+  // port still decides who coordinates; a channel some other process answers
+  // on while we hold the lock is not ours to take.
+  async _serveChannel(server: http.Server, lock: net.Server, { dir, stamp }: { dir: string; stamp: string }) {
+    let state: string;
+    try {
+      ({ state } = await serveLocal(server, { kind: CHANNEL_KIND, stamp, dir, platform: 'win32', log: this.log }));
+    } catch (err) {
+      state = (err as Error).message;
+    }
+    if (state !== 'serving') {
+      this.log(`memory gate: could not serve the local channel: ${state}`);
+      await new Promise<void>((r) => lock.close(() => r()));
+      return false;
+    }
     this.server = server;
     this.lock = lock;
     return true;
@@ -563,7 +628,7 @@ export class MemoryGateServer {
       // the kernel's own pressure reading holds the next heavy command back
       // anyway.
       const held = now - grant.startedAt;
-      if (held >= this.maxGrantMs || (grant.ambiguous && held >= this.sharedGrantMs)) {
+      if (held >= this.maxGrantMs || ((grant.ambiguous || (this.blind && !grant.anchor)) && held >= this.sharedGrantMs)) {
         this.grants.delete(grant.id);
         this.gate.finish(grant.id);
         continue;
