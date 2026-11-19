@@ -40,7 +40,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force shots | Out-Null
-          $app = Start-Process -FilePath node_modules\electron\dist\electron.exe -ArgumentList '.' -PassThru `
+          $exe = node -p "require('electron')"
+          "electron at: $exe, exists: $(Test-Path $exe)"
+          $app = Start-Process -FilePath $exe -ArgumentList '.' -WorkingDirectory $PWD -PassThru `
             -RedirectStandardOutput shots\app-out.txt -RedirectStandardError shots\app-err.txt
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
           function Shot($name) {

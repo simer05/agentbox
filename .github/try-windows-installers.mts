@@ -25,9 +25,10 @@ for (const engine of ['claude', 'codex'] as const) {
   const before = finders[engine]();
   console.log('before install, found:', before.found, before.path);
   const env = terminalEnv(process.env);
-  const { file, args } = installCommand(engine, 'win32', env);
+  const { file, args, env: installEnv } = installCommand(engine, 'win32', env);
   console.log('install command:', file, args.join(' '));
-  const code = await run(file, args, env);
+  console.log('PSModulePath here:', env.PSModulePath ?? '(none)', '| handed to the installer:', installEnv ? (Object.keys(installEnv).some((k) => k.toLowerCase() === 'psmodulepath') ? 'kept' : 'removed') : 'same env');
+  const code = await run(file, args, installEnv ?? env);
   console.log('installer exit code:', code);
   const after = finders[engine]();
   console.log('after install, found:', after.found, after.path, 'from:', after.from);
