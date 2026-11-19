@@ -40,7 +40,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force shots | Out-Null
-          $exe = node -p "require('electron')"
+          node -p "require('electron')" | Out-Null
+          $exe = (node -p "require('electron')" | Select-Object -Last 1).Trim()
           "electron at: $exe, exists: $(Test-Path $exe)"
           $app = Start-Process -FilePath $exe -ArgumentList '.' -WorkingDirectory $PWD -PassThru `
             -RedirectStandardOutput shots\app-out.txt -RedirectStandardError shots\app-err.txt
