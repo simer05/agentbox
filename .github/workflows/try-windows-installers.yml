@@ -1,6 +1,6 @@
-# Test-only, on a throwaway branch: runs the app's Windows install buttons'
-# command for Claude Code and Codex on a fresh Windows machine, then checks
-# the app finds each one. No sign-in, no secrets.
+# Test-only, on a throwaway branch, on a fresh GitHub Windows machine:
+# runs the install buttons' command for Claude Code and Codex and checks the
+# app finds each one, and opens the app to screenshot its window. No sign-in, no secrets.
 name: try-windows-installers
 
 on:
@@ -24,3 +24,39 @@ jobs:
       - run: npm ci
       - run: node --version
       - run: node .github/try-windows-installers.mts
+
+  window-screenshot:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx vite build renderer
+      - name: Open the app and take screenshots
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force shots | Out-Null
+          $app = Start-Process -FilePath node_modules\electron\dist\electron.exe -ArgumentList '.' -PassThru `
+            -RedirectStandardOutput shots\app-out.txt -RedirectStandardError shots\app-err.txt
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Shot($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save("shots\$name.png", [System.Drawing.Imaging.ImageFormat]::Png)
+            $g.Dispose(); $bmp.Dispose()
+          }
+          Start-Sleep -Seconds 30; Shot 'after-30s'
+          Start-Sleep -Seconds 30; Shot 'after-60s'
+          "app still running: $(-not $app.HasExited)" | Tee-Object shots\status.txt
+          if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: window-screenshots
+          path: shots
