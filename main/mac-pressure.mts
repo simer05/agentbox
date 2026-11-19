@@ -7,6 +7,7 @@
 
 import { execFile } from 'node:child_process';
 import type { PressureReading } from './memory-gate.mts';
+import { readWindowsPressure } from './windows-pressure.mts';
 
 const NAMES = [
   'kern.memorystatus_vm_pressure_level',
@@ -81,8 +82,13 @@ function sysctl(): Promise<string> {
   });
 }
 
-/** This Mac's pressure now. Nulls for whatever it cannot read; never throws. */
-export async function readMacPressure(): Promise<PressureReading> {
+/**
+ * This Mac's pressure now. Nulls for whatever it cannot read; never throws.
+ * On Windows it is the available-memory share instead (main/windows-pressure.mts),
+ * so every reader of this one function holds back there too.
+ */
+export async function readMacPressure(platform: NodeJS.Platform = process.platform): Promise<PressureReading> {
+  if (platform === 'win32') return readWindowsPressure();
   const r = readingFromSysctl(await sysctl());
   const rate = r.swapInBytes === null ? null : meter.add(r.swapInBytes, Date.now());
   return {

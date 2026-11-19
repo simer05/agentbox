@@ -43,6 +43,7 @@
 import { execFileSync } from 'node:child_process';
 import { pressureFrom, SWAP_CRITICAL_MBPS } from './memory-gate.mts';
 import type { Pressure, PressureReading } from './memory-gate.mts';
+import { readWindowsPressure } from './windows-pressure.mts';
 
 export interface PressureSample extends PressureReading { at: number }
 
@@ -65,7 +66,8 @@ export interface StartDecisionInput {
 
 /** One reading, synchronously, for the moment before a restart brings the
  *  fleet back. Nulls (so no hold) when it cannot be read. */
-export function readMacPressureNow(): PressureSample {
+export function readMacPressureNow(platform: NodeJS.Platform = process.platform): PressureSample {
+  if (platform === 'win32') return { ...readWindowsPressure(), at: Date.now() };
   let level: number | null = null;
   let freePct: number | null = null;
   try {
