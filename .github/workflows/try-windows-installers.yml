@@ -1,6 +1,7 @@
-# Test-only, on a throwaway branch, on a fresh GitHub Windows machine:
-# runs the install buttons' command for Claude Code and Codex and checks the
-# app finds each one, and opens the app to screenshot its window. No sign-in, no secrets.
+# Test-only, on a throwaway branch, on a fresh GitHub Windows machine: opens
+# the app past its first screen and screenshots its main pages. A stand-in
+# claude.exe, made on the machine, answers the app's "installed?" and
+# "signed in?" checks with yes. No real agent, no account, no secrets.
 name: try-windows-installers
 
 on:
@@ -12,20 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  install-and-find:
-    runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
-      - run: node --version
-      - run: node .github/try-windows-installers.mts
-
-  window-screenshot:
+  main-pages-screenshot:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -36,16 +24,32 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx vite build renderer
+      - name: Make a stand-in Claude Code that says it is installed and signed in
+        shell: powershell
+        run: |
+          $src = @'
+          public static class StandIn {
+            public static int Main(string[] args) {
+              string all = string.Join(" ", args);
+              if (all.Contains("--version")) { System.Console.WriteLine("1.0.0 (stand-in)"); return 0; }
+              if (all.StartsWith("auth status")) { System.Console.WriteLine("{\"loggedIn\": true}"); return 0; }
+              return 0;
+            }
+          }
+          '@
+          New-Item -ItemType Directory -Force "$HOME\.local\bin", "$HOME\.claude" | Out-Null
+          Add-Type -TypeDefinition $src -OutputType ConsoleApplication -OutputAssembly "$HOME\.local\bin\claude.exe"
+          & "$HOME\.local\bin\claude.exe" auth status --json; "exit $LASTEXITCODE"
       - name: Open the app and take screenshots
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force shots | Out-Null
           node -p "require('electron')" | Out-Null
           $exe = (node -p "require('electron')" | Select-Object -Last 1).Trim()
-          "electron at: $exe, exists: $(Test-Path $exe)"
           $app = Start-Process -FilePath $exe -ArgumentList '.' -WorkingDirectory $PWD -PassThru `
             -RedirectStandardOutput shots\app-out.txt -RedirectStandardError shots\app-err.txt
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $shell = New-Object -ComObject WScript.Shell
           function Shot($name) {
             $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
             $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
@@ -54,12 +58,25 @@ jobs:
             $bmp.Save("shots\$name.png", [System.Drawing.Imaging.ImageFormat]::Png)
             $g.Dispose(); $bmp.Dispose()
           }
-          Start-Sleep -Seconds 30; Shot 'after-30s'
-          Start-Sleep -Seconds 30; Shot 'after-60s'
+          function Key($keys, $name) {
+            $null = $shell.AppActivate($app.Id); Start-Sleep -Milliseconds 500
+            $shell.SendKeys($keys); Start-Sleep -Seconds 4; Shot $name
+          }
+          Start-Sleep -Seconds 30; Shot '01-after-30s'
+          Start-Sleep -Seconds 30; Shot '02-after-60s'
+          # Whatever the first pages ask, Enter is their usual next step.
+          Key '{ENTER}' '03-enter'
+          Key '{ENTER}' '04-enter'
+          Key '{ENTER}' '05-enter'
+          Key '{ESC}' '06-escape'
+          Key '{ESC}' '07-escape'
+          # The window maximised, and back.
+          Key '% x' '08-maximised'
+          Key '% r' '09-restored'
           "app still running: $(-not $app.HasExited)" | Tee-Object shots\status.txt
           if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: window-screenshots
+          name: main-pages-screenshots
           path: shots
