@@ -62,17 +62,27 @@ jobs:
             $null = $shell.AppActivate($app.Id); Start-Sleep -Milliseconds 500
             $shell.SendKeys($keys); Start-Sleep -Seconds 4; Shot $name
           }
-          Start-Sleep -Seconds 30; Shot '01-after-30s'
-          Start-Sleep -Seconds 30; Shot '02-after-60s'
-          # Whatever the first pages ask, Enter is their usual next step.
-          Key '{ENTER}' '03-enter'
-          Key '{ENTER}' '04-enter'
-          Key '{ENTER}' '05-enter'
+          Add-Type -Namespace W -Name Mouse -MemberDefinition @'
+          [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+          [DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e);
+          '@
+          function Click($x, $y, $name) {
+            $null = $shell.AppActivate($app.Id); Start-Sleep -Milliseconds 500
+            [W.Mouse]::SetCursorPos($x, $y); Start-Sleep -Milliseconds 200
+            [W.Mouse]::mouse_event(2, 0, 0, 0, 0); [W.Mouse]::mouse_event(4, 0, 0, 0, 0)
+            Start-Sleep -Seconds 5; Shot $name
+          }
+          Start-Sleep -Seconds 60; Shot '01-welcome'
+          Key '{ENTER}' '02-get-started'
+          # "Skip for now" under the folder step, then whatever step 2 asks.
+          Click 295 515 '03-skipped-folder'
+          Start-Sleep -Seconds 5; Shot '04-step-2'
+          Click 295 515 '05-skip-again'
           Key '{ESC}' '06-escape'
-          Key '{ESC}' '07-escape'
-          # The window maximised, and back.
-          Key '% x' '08-maximised'
-          Key '% r' '09-restored'
+          Start-Sleep -Seconds 10; Shot '07-after-10s'
+          Key '{ENTER}' '08-enter'
+          Key '{ESC}' '09-escape'
+          Start-Sleep -Seconds 10; Shot '10-after-10s'
           "app still running: $(-not $app.HasExited)" | Tee-Object shots\status.txt
           if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
       - uses: actions/upload-artifact@v4
