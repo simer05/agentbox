@@ -40,6 +40,11 @@ jobs:
           New-Item -ItemType Directory -Force "$HOME\.local\bin", "$HOME\.claude" | Out-Null
           Add-Type -TypeDefinition $src -OutputType ConsoleApplication -OutputAssembly "$HOME\.local\bin\claude.exe"
           & "$HOME\.local\bin\claude.exe" auth status --json; "exit $LASTEXITCODE"
+      - name: Get a screen recorder
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { choco install ffmpeg -y --no-progress | Select-Object -Last 3 }
+          ffmpeg -version | Select-Object -First 1
       - name: Open the app and take screenshots
         shell: pwsh
         run: |
@@ -72,29 +77,45 @@ jobs:
             [W.Mouse]::mouse_event(2, 0, 0, 0, 0); [W.Mouse]::mouse_event(4, 0, 0, 0, 0)
             Start-Sleep -Seconds 5; Shot $name
           }
-          Start-Sleep -Seconds 60; Shot '01-welcome'
-          Key '{ENTER}' '02-get-started'
-          # "Skip for now" under the folder step, then whatever step 2 asks.
-          Click 295 515 '03-skipped-folder'
-          Click 412 568 '04-dark-look'
-          Key '{ENTER}' '05-all-set'
-          Key '{ENTER}' '06-walkthrough'
-          # "Skip walkthrough" sits just left of the window buttons.
-          Click 814 26 '07-skipped-walkthrough'
-          Start-Sleep -Seconds 5; Shot '08-home'
-          # The sidebar, top to bottom.
-          Click 57 257 '09-sidebar-list'
-          Click 57 296 '10-sidebar-connections'
-          Click 57 335 '11-sidebar-files'
-          Click 57 170 '12-sidebar-search'
-          Key '{ESC}' '13-escape'
-          Click 57 651 '14-sidebar-settings'
-          Click 57 613 '15-sidebar-send'
-          Key '{ESC}' '16-escape'
-          Click 57 218 '17-home-again'
-          # The maximise button itself, then again to restore.
-          Click 955 20 '18-maximised'
-          Click 955 20 '19-restored'
+          function Hover($x, $y, $name) { [W.Mouse]::SetCursorPos($x, $y); Start-Sleep -Seconds 2; Shot $name }
+          function Type($text, $name) {
+            $null = $shell.AppActivate($app.Id); Start-Sleep -Milliseconds 300
+            foreach ($c in $text.ToCharArray()) { $shell.SendKeys("$c"); Start-Sleep -Milliseconds 60 }
+            Start-Sleep -Seconds 2; Shot $name
+          }
+          Start-Sleep -Seconds 50
+          # A screen recording of everything below; fragmented, so stopping it leaves a playable file.
+          $rec = Start-Process -FilePath ffmpeg -PassThru -WindowStyle Hidden -ArgumentList '-y -f gdigrab -framerate 8 -i desktop -t 240 -vf scale=1024:-2 -c:v libx264 -preset veryfast -pix_fmt yuv420p -movflags frag_keyframe+empty_moov shots\walk-through-the-app.mp4' `
+            -RedirectStandardError shots\ffmpeg-err.txt
+          Start-Sleep -Seconds 3; Shot '01-welcome'
+          Hover 1000 20 '02-hover-close-light'
+          Hover 910 20 '03-hover-minimise-light'
+          [W.Mouse]::SetCursorPos(500, 600)
+          Key '{ENTER}' '04-get-started'
+          Click 295 515 '05-skipped-folder'
+          Click 412 568 '06-dark-look'
+          Key '{ENTER}' '07-all-set'
+          Key '{ENTER}' '08-walkthrough'
+          Click 814 26 '09-skipped-walkthrough'
+          Start-Sleep -Seconds 3; Shot '10-home'
+          Hover 1000 20 '11-hover-close-dark'
+          Hover 955 20 '12-hover-maximise-dark'
+          # Write a task and send it. The agent is the stand-in, so it does no work.
+          Click 500 320 '13-composer'
+          Type 'Write a short README for this project' '14-typed'
+          Key '^{ENTER}' '15-sent'
+          Start-Sleep -Seconds 6; Shot '16-after-send'
+          Click 41 205 '17-inbox'
+          Click 41 244 '18-connections'
+          Click 41 283 '19-files'
+          Click 41 668 '20-settings'
+          Click 93 218 '21-appearance'
+          Key '{ESC}' '22-back'
+          Click 41 166 '23-home'
+          Click 955 20 '24-maximised'
+          Click 955 20 '25-restored'
+          Start-Sleep -Seconds 3
+          if (-not $rec.HasExited) { Stop-Process -Id $rec.Id -Force }
           "app still running: $(-not $app.HasExited)" | Tee-Object shots\status.txt
           if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
       - uses: actions/upload-artifact@v4
