@@ -76,13 +76,17 @@ jobs:
           Key '{ENTER}' '02-get-started'
           # "Skip for now" under the folder step, then whatever step 2 asks.
           Click 295 515 '03-skipped-folder'
-          Start-Sleep -Seconds 5; Shot '04-step-2'
-          Click 295 515 '05-skip-again'
-          Key '{ESC}' '06-escape'
-          Start-Sleep -Seconds 10; Shot '07-after-10s'
-          Key '{ENTER}' '08-enter'
+          Click 412 568 '04-dark-look'
+          Key '{ENTER}' '05-all-set'
+          Key '{ENTER}' '06-walkthrough'
+          Key '{ENTER}' '07-walkthrough-next'
+          Key '{ESC}' '08-escape'
           Key '{ESC}' '09-escape'
           Start-Sleep -Seconds 10; Shot '10-after-10s'
+          Key '^k' '11-palette'
+          Key '{ESC}' '12-escape'
+          Key '% x' '13-maximised'
+          Start-Sleep -Seconds 5; Shot '14-maximised-later'
           "app still running: $(-not $app.HasExited)" | Tee-Object shots\status.txt
           if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
       - uses: actions/upload-artifact@v4
