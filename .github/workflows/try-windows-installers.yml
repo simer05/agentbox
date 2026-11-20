@@ -78,7 +78,7 @@ jobs:
             Start-Sleep -Seconds 5; Shot $name
           }
           function Hover($x, $y, $name) { [W.Mouse]::SetCursorPos($x, $y); Start-Sleep -Seconds 2; Shot $name }
-          function Type($text, $name) {
+          function TypeText($text, $name) {
             $null = $shell.AppActivate($app.Id); Start-Sleep -Milliseconds 300
             foreach ($c in $text.ToCharArray()) { $shell.SendKeys("$c"); Start-Sleep -Milliseconds 60 }
             Start-Sleep -Seconds 2; Shot $name
@@ -102,7 +102,7 @@ jobs:
           Hover 955 20 '12-hover-maximise-dark'
           # Write a task and send it. The agent is the stand-in, so it does no work.
           Click 500 320 '13-composer'
-          Type 'Write a short README for this project' '14-typed'
+          TypeText 'Write a short README for this project' '14-typed'
           Key '^{ENTER}' '15-sent'
           Start-Sleep -Seconds 6; Shot '16-after-send'
           Click 41 205 '17-inbox'

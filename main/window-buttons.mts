@@ -14,7 +14,7 @@ export const BUTTONS_HEIGHT = 40;
 // Opaque, because Electron does not promise a see-through overlay works: the
 // band's own ground (styles.css --bg) and ink (--text) in each theme. A skin
 // with a darker ground of its own still gets the plain dark one.
-const DARK = { color: 'rgba(0, 0, 0, 0)', symbolColor: '#f0f1f3' };
+const DARK = { color: 'rgba(255, 255, 255, 0)', symbolColor: '#f0f1f3' };
 const LIGHT = { color: 'rgba(0, 0, 0, 0)', symbolColor: '#12182a' };
 
 export type TitleBarOverlay = { color: string; symbolColor: string; height: number };
