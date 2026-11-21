@@ -1,0 +1,41 @@
+# Test-only, on a throwaway branch, on a fresh GitHub Windows machine:
+# packages the app for Windows (unsigned, into a folder, nothing installed)
+# and runs the memory check's hook through the packaged binary against a real
+# coordinator. No Claude Code, no account, no secrets.
+name: try-windows-memory-hook
+
+on:
+  push:
+    branches: ['test/ch6-packaged']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packaged-hook:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx vite build renderer
+      - name: Package the app for Windows into a folder
+        run: npx electron-builder --win dir --publish never -c.npmRebuild=false
+      - name: Run the memory hook through the packaged app
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Get-ChildItem release -Directory | Select-Object -ExpandProperty Name
+          $exe = Get-ChildItem release\win-unpacked\*.exe | Where-Object Name -notmatch 'Uninstall|elevate' | Select-Object -First 1
+          node .github/try/memory-hook-packaged.mjs $exe.FullName release\win-unpacked\resources 2>&1 | Tee-Object out\results.txt
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: packaged-memory-hook
+          path: out
