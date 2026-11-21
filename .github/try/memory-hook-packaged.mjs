@@ -5,7 +5,7 @@
 // local channel. No Claude Code, no account, no secrets.
 //
 //   node memory-hook-packaged.mjs <Agentbox.exe> <resources folder>
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,7 +14,8 @@ import { CommandHistory } from '../../main/memory-gate-history.mts';
 
 setTimeout(() => { console.log('FAIL: the whole run took over 10 minutes'); process.exit(1); }, 10 * 60_000).unref();
 
-const [exe, resources] = process.argv.slice(2);
+const [exe, resourcesGiven] = process.argv.slice(2);
+const resources = path.resolve(resourcesGiven);
 const cmd = path.join(resources, 'app.asar.unpacked', 'scripts', 'memory-gate-hook.cmd');
 const hook = path.join(resources, 'app.asar', 'main', 'memory-gate-hook.mts');
 const gitBash = 'C:\\Program Files\\Git\\bin\\bash.exe';
@@ -113,6 +114,18 @@ for (const [name, shell] of [['cmd.exe', true], ['Git Bash', fs.existsSync(gitBa
 // with "shell": "powershell". Claude Code's own spawn line is not published;
 // this is -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command <line>.
 const shells = [['powershell.exe', 'powershell.exe'], ['pwsh', 'pwsh.exe']];
+const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-'));
+const probe = path.join(probeDir, 'probe.cmd');
+fs.writeFileSync(probe, '@echo off\r\nfindstr "^" > "%~dp0in.txt"\r\necho args=%*> "%~dp0args.txt"\r\nset AGENTBOX_ > "%~dp0env.txt" 2>&1\r\nexit /b 0\r\n');
+for (const [shellName, exePs] of shells) {
+  for (const [lineName, line] of Object.entries({ plain: (m) => `& "${probe}" ${m}`, piped: (m) => `$input | & "${probe}" ${m}` })) {
+    for (const f of ['in.txt', 'args.txt', 'env.txt']) fs.rmSync(path.join(probeDir, f), { force: true });
+    const r = spawnSync(exePs, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', line('pre')],
+      { input: '{"tool_input":{"command":"git status"}}', encoding: 'utf8', timeout: 30_000, env: { ...process.env, AGENTBOX_PROBE: 'yes' } });
+    const read = (f) => { try { return fs.readFileSync(path.join(probeDir, f), 'utf8').trim(); } catch { return '(none)'; } };
+    console.log(`probe ${shellName} ${lineName}: exit ${r.status} stdout ${JSON.stringify(r.stdout)} stderr ${JSON.stringify((r.stderr || '').slice(0, 300))} | stdin seen ${JSON.stringify(read('in.txt'))} | ${read('args.txt')} | env ${JSON.stringify(read('env.txt'))}`);
+  }
+}
 const lines = {
   'plain "& path"': (mode) => `& "${cmd}" ${mode}`,
   '"$input | & path"': (mode) => `$input | & "${cmd}" ${mode}`,
