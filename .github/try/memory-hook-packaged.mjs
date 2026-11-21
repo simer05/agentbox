@@ -12,7 +12,7 @@ import path from 'node:path';
 import { MemoryGateServer } from '../../main/memory-gate-server.mts';
 import { CommandHistory } from '../../main/memory-gate-history.mts';
 
-setTimeout(() => { console.log('FAIL: the whole run took over 5 minutes'); process.exit(1); }, 5 * 60_000).unref();
+setTimeout(() => { console.log('FAIL: the whole run took over 10 minutes'); process.exit(1); }, 10 * 60_000).unref();
 
 const [exe, resources] = process.argv.slice(2);
 const cmd = path.join(resources, 'app.asar.unpacked', 'scripts', 'memory-gate-hook.cmd');
@@ -48,10 +48,11 @@ const server = new MemoryGateServer({
 });
 check((await server.start()) === 'owner', 'the coordinator serves the local channel');
 
-function run(mode, { id = 't1', command = 'git status', shell = true } = {}) {
+function run(mode, { id = 't1', command = 'git status', shell = true, ps = null } = {}) {
   const input = JSON.stringify({ session_id: 's1', hook_event_name: mode === 'pre' ? 'PreToolUse' : 'PostToolUse', tool_name: 'Bash', tool_use_id: id, tool_input: { command }, duration_ms: 1200 });
-  const child = spawn(`"${cmd}" ${mode}`, {
-    shell, windowsHide: true,
+  const [file, args] = ps ? [ps.exe, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps.line(mode)]] : [`"${cmd}" ${mode}`, []];
+  const child = spawn(file, args, {
+    shell: ps ? false : shell, windowsHide: true,
     env: {
       PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec,
       LOCALAPPDATA: process.env.LOCALAPPDATA, USERPROFILE: process.env.USERPROFILE, TEMP: process.env.TEMP, TMP: process.env.TMP,
@@ -108,6 +109,43 @@ for (const [name, shell] of [['cmd.exe', true], ['Git Bash', fs.existsSync(gitBa
   }
   if (pre.length) console.log(`${name}: before a command median ${median(pre)} ms, p90 ${p90(pre)} ms; after median ${median(post)} ms (${pre.length} runs)`);
 }
+// 4. Through PowerShell, which Claude Code uses for hooks without Git Bash or
+// with "shell": "powershell". Claude Code's own spawn line is not published;
+// this is -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command <line>.
+const shells = [['powershell.exe', 'powershell.exe'], ['pwsh', 'pwsh.exe']];
+const lines = {
+  'plain "& path"': (mode) => `& "${cmd}" ${mode}`,
+  '"$input | & path"': (mode) => `$input | & "${cmd}" ${mode}`,
+};
+for (const [shellName, exePs] of shells) {
+  for (const [lineName, line] of Object.entries(lines)) {
+    const ps = { exe: exePs, line };
+    const asked = server.status().counts.asked;
+    const a = await within(run('pre', { id: `ps-${shellName}-${lineName}`, ps }).done, 30_000);
+    const reached = server.status().counts.asked === asked + 1;
+    await within(run('post', { id: `ps-${shellName}-${lineName}`, ps }).done, 30_000);
+    console.log(`${shellName} ${lineName}: ${JSON.stringify(a)} reached coordinator: ${reached}`);
+    if (!reached) continue;
+    // Does it hold, and what does it cost?
+    await within(run('pre', { id: 'ph1', command: 'npm test', ps }).done, 30_000);
+    const held = run('pre', { id: 'ph2', command: 'cargo build', ps });
+    const waited = (await within(held.done, 3_000)) === 'timeout';
+    await within(run('post', { id: 'ph1', command: 'npm test', ps }).done, 30_000);
+    const went = await within(held.done, 30_000);
+    await within(run('post', { id: 'ph2', command: 'cargo build', ps }).done, 30_000);
+    const times = [];
+    for (let i = 0; i < 10; i++) {
+      const t = await within(run('pre', { id: `pm${i}`, ps }).done, 30_000);
+      await within(run('post', { id: `pm${i}`, ps }).done, 30_000);
+      if (t !== 'timeout') times.push(t.ms);
+    }
+    console.log(`  ${shellName} ${lineName}: holds a second heavy command: ${waited && went !== 'timeout'}; before a command median ${median(times)} ms, p90 ${p90(times)} ms`);
+  }
+}
+const psStart = [];
+for (let i = 0; i < 5; i++) { const t = performance.now(); execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { timeout: 30_000 }); psStart.push(Math.round(performance.now() - t)); }
+console.log(`powershell.exe starting and doing nothing: median ${median(psStart)} ms`);
+
 console.log(`the packaged binary starting as a node and doing nothing: median ${median(startOnly)} ms, p90 ${p90(startOnly)} ms`);
 
 await server.stop();
