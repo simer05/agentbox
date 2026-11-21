@@ -54,7 +54,9 @@ function run(mode, { id = 't1', command = 'git status', shell = true, ps = null 
   const [file, args] = ps ? [ps.exe, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps.line(mode)]] : [`"${cmd}" ${mode}`, []];
   const child = spawn(file, args, {
     shell: ps ? false : shell, windowsHide: true,
+    // PowerShell runs a .cmd only with the full environment (PATHEXT and the rest), as Claude Code hands it.
     env: {
+      ...(ps ? process.env : {}),
       PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec,
       LOCALAPPDATA: process.env.LOCALAPPDATA, USERPROFILE: process.env.USERPROFILE, TEMP: process.env.TEMP, TMP: process.env.TMP,
       AGENTBOX_GATE_CHANNEL: path.join(dir, 'channels'), AGENTBOX_GATE_STAMP: 'try',
