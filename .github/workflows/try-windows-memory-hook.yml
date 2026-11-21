@@ -25,7 +25,8 @@ jobs:
       - run: npm ci
       - run: npx vite build renderer
       - name: Package the app for Windows into a folder
-        run: npx electron-builder --win dir --publish never -c.npmRebuild=false
+        shell: bash
+        run: npx electron-builder --win dir --publish never --config.npmRebuild=false
       - name: Run the memory hook through the packaged app
         shell: pwsh
         run: |
