@@ -155,6 +155,38 @@ for (const [shellName, exePs] of shells) {
     console.log(`  ${shellName} ${lineName}: holds a second heavy command: ${waited && went !== 'timeout'}; before a command median ${median(times)} ms, p90 ${p90(times)} ms`);
   }
 }
+// 5. Diagnostic: a copy of the real .cmd that writes down what it sees and
+// what the hook prints on stderr, started from PowerShell and from cmd.exe
+// with the same environment the runs above use.
+const diag = path.join(probeDir, 'diag.cmd');
+fs.writeFileSync(diag, [
+  '@echo off', 'setlocal DisableDelayedExpansion',
+  'set AGENTBOX_ > "%~dp0diag-env-%1.txt"',
+  'if not defined AGENTBOX_GATE_RUNTIME (echo no runtime> "%~dp0diag-err-%1.txt" & exit /b 0)',
+  'set ELECTRON_RUN_AS_NODE=1',
+  '"%AGENTBOX_GATE_RUNTIME%" %AGENTBOX_GATE_FLAGS% "%AGENTBOX_GATE_HOOK%" pre 2> "%~dp0diag-err-%1.txt" > "%~dp0diag-out-%1.txt"',
+  'echo rc=%errorlevel%>> "%~dp0diag-err-%1.txt"', 'exit /b 0', '',
+].join('\r\n'));
+const gateEnv = {
+  PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec,
+  LOCALAPPDATA: process.env.LOCALAPPDATA, USERPROFILE: process.env.USERPROFILE, TEMP: process.env.TEMP, TMP: process.env.TMP,
+  AGENTBOX_GATE_CHANNEL: path.join(dir, 'channels'), AGENTBOX_GATE_STAMP: 'try',
+  AGENTBOX_GATE_RUNTIME: exe, AGENTBOX_GATE_FLAGS: flags, AGENTBOX_GATE_HOOK: hook,
+  AGENTBOX_GATE_ITEM: 'w-try', AGENTBOX_GATE_PRODUCT: 'demo', AGENTBOX_GATE_SCORE: '5', AGENTBOX_GATE_RETRY_S: '0.1',
+};
+const payload = JSON.stringify({ session_id: 's1', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'diag', tool_input: { command: 'git status' } });
+for (const [tag, file, args, opts] of [
+  ['viacmd', `"${diag}" viacmd`, [], { shell: true }],
+  ['viaps', 'powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `& "${diag}" viaps`], {}],
+  ['viapsfull', 'powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `& "${diag}" viapsfull`], { fullEnv: true }],
+]) {
+  const asked = server.status().counts.asked;
+  const env = opts.fullEnv ? { ...process.env, ...gateEnv } : gateEnv;
+  const r = spawnSync(file, args, { shell: opts.shell ?? false, input: payload, encoding: 'utf8', timeout: 30_000, env, windowsHide: true });
+  const read = (f) => { try { return fs.readFileSync(path.join(probeDir, f), 'utf8').trim(); } catch { return '(none)'; } };
+  console.log(`diag ${tag}: exit ${r.status} reached ${server.status().counts.asked === asked + 1} | env ${JSON.stringify(read(`diag-env-${tag}.txt`))} | hook stderr ${JSON.stringify(read(`diag-err-${tag}.txt`).slice(0, 600))} | ps stderr ${JSON.stringify((r.stderr || '').slice(0, 300))}`);
+}
+
 const psStart = [];
 for (let i = 0; i < 5; i++) { const t = performance.now(); execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { timeout: 30_000 }); psStart.push(Math.round(performance.now() - t)); }
 console.log(`powershell.exe starting and doing nothing: median ${median(psStart)} ms`);
